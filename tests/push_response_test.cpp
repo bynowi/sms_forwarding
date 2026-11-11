@@ -36,6 +36,9 @@ constexpr int HTTP_METHOD_GET = 0, HTTP_METHOD_POST = 1, HTTP_EVENT_ON_DATA = 1;
 bool wifi = true;
 int mock_status = 200, mock_error = ESP_OK, chunk_size = 7;
 std::string mock_body, last_log, sent_body, sent_url;
+std::string mock_signing_error, signed_data, signing_key;
+int signing_calls = 0, http_calls = 0;
+int64_t mock_millis = 1794205446000;
 struct Client;
 using esp_http_client_handle_t = Client*;
 struct esp_http_client_event_t {
@@ -60,6 +63,7 @@ void esp_http_client_set_header(Client*, const char*, const char*) {}
 void esp_http_client_set_post_field(Client*, const char* data, size_t n) { sent_body.assign(data, n); }
 int esp_http_client_get_status_code(Client*) { return mock_status; }
 esp_err_t esp_http_client_perform(Client* client) {
+    ++http_calls;
     for (size_t offset = 0; offset < mock_body.size(); offset += chunk_size) {
         size_t n = std::min(static_cast<size_t>(chunk_size), mock_body.size() - offset);
         esp_http_client_event_t event{HTTP_EVENT_ON_DATA, static_cast<int>(n), &mock_body[offset], client->config.user_data, client};
@@ -75,6 +79,7 @@ IdfSimSettingsView idf_config_get_sim_settings_view() { return {}; }
 esp_err_t idf_modem_cellular_http_request(const std::string& url, const char*, const char*, const std::string& body,
                                         const IdfCellularHttpConfig&, IdfCellularHttpResult& result) {
     sent_url = url; sent_body = body; result.httpStatus = mock_status;
+    ++http_calls;
     result.responseComplete = mock_error == ESP_OK;
     result.response.append(mock_body.data(), mock_body.size());
     return mock_error != ESP_OK ? mock_error : (mock_status >= 400 ? ESP_FAIL : ESP_OK);
@@ -89,8 +94,12 @@ std::string local_phone_number() { return {}; }
 std::string json_escape(const std::string& s) { return s; }
 std::string html_escape(const std::string& s) { return s; }
 std::string url_encode(const std::string& s) { return s; }
-std::string hmac_sha256_base64(const std::string&, const std::string&) { return "test-signature"; }
-int64_t utc_millis() { return 1794205446000; }
+std::string hmac_sha256_base64(const std::string& data, const std::string& key, std::string* error = nullptr) {
+    ++signing_calls; signed_data = data; signing_key = key;
+    if (error) *error = mock_signing_error;
+    return mock_signing_error.empty() ? "test-signature" : "";
+}
+int64_t utc_millis() { return mock_millis; }
 void json_prop(std::string& out, const char* key, const std::string& value) { out += std::string("\"") + key + "\":\"" + value + "\""; }
 std::string apply_push_placeholders(const std::string& s, const std::string&, const std::string&, const std::string&, const std::string&) { return s; }
 struct BarkTarget { bool ok = true; std::string url = "https://example.invalid/push", device_key = "key"; };
@@ -191,6 +200,29 @@ int main() {
     assert(idf_push_serverchan_url("sctp123tABC", "") == "https://123.push.ft07.com/send/sctp123tABC.send");
     assert(idf_push_serverchan_url("sctpBAD", "").empty());
     assert(idf_push_serverchan_url("sctp123tABC", "https://custom.invalid/api.send") == "https://custom.invalid/api.send");
+    // 时间检查先于签名；两个原因必须分别呈现，均不得发出 HTTP 请求。
+    for (int type : {4, 8}) {
+        IdfPushChannel ch; ch.enabled = true; ch.type = static_cast<uint8_t>(type);
+        ch.url = "https://example.invalid"; ch.key1 = "SECtest";
+        std::string detail;
+        signing_calls = http_calls = 0; mock_millis = 0;
+        assert(!send_to_channel(ch, "sender", "body", "time", false, &detail));
+        assert(detail.find("时间尚未同步") != std::string::npos && signing_calls == 0 && http_calls == 0);
+        mock_millis = 1794205446000; mock_signing_error = "HMAC-SHA256 计算失败 (PSA -134)";
+        assert(!send_to_channel(ch, "sender", "body", "time", false, &detail));
+        assert(detail.find("签名生成失败") != std::string::npos && detail.find("PSA -134") != std::string::npos);
+        assert(detail.find("时间尚未同步") == std::string::npos && http_calls == 0);
+        mock_signing_error.clear();
+        mock_body = type == 4 ? "{\"errcode\":0}" : "{\"code\":0}";
+        assert(send_to_channel(ch, "sender", "body", "time", false, &detail));
+        if (type == 4) {
+            assert(signing_key == "SECtest" && signed_data == "1794205446000\nSECtest");
+            assert(sent_url.find("timestamp=1794205446000") != std::string::npos);
+        } else {
+            assert(signing_key == "1794205446\nSECtest" && signed_data.empty());
+            assert(sent_body.find("\"timestamp\":\"1794205446\"") != std::string::npos);
+        }
+    }
     // 真实后台任务必须把平台拒绝送回重试队列，而不能标记为转发完成。
     queued_channel.enabled = true; queued_channel.type = 8; queued_channel.url = "https://example.invalid";
     for (bool connected : {true, false}) {

@@ -30,6 +30,7 @@ jobs:
           python tools/test_modem_uart.py
           python tools/test_cellular_http.py
           python tools/test_push_response.py
+          python tools/test_push_signing.py
           python tools/test_keepalive_config.py
           python tools/test_daily_heartbeat.py
           python tools/test_scheduled_sms_health.py

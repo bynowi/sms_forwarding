@@ -37,7 +37,7 @@
 #include "esp_idf_version.h"
 #include "mbedtls/base64.h"
 #include "mbedtls/error.h"
-#include "mbedtls/md.h"
+#include "psa/crypto.h"
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/ssl.h"
 #if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0)
@@ -344,24 +344,47 @@ static std::string url_encode(const std::string& value)
     return out;
 }
 
-static std::string hmac_sha256_base64(const std::string& data, const std::string& key)
+static std::string hmac_sha256_base64(const std::string& data, const std::string& key,
+                                      std::string* error = nullptr)
 {
+    if (error) error->clear();
+    auto fail = [&](const char* stage, psa_status_t status) {
+        if (error) *error = std::string(stage) + " (PSA " + std::to_string(status) + ")";
+        return std::string();
+    };
+    // IDF 6 / Mbed TLS 4 已移除 MD 上下文的 HMAC 模式，必须使用 PSA MAC 接口。
+    psa_status_t status = psa_crypto_init();
+    if (status != PSA_SUCCESS) return fail("加密库初始化失败", status);
+    if (key.empty()) return fail("加签密钥为空", PSA_ERROR_INVALID_ARGUMENT);
+
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_HMAC);
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_SIGN_MESSAGE);
+    psa_set_key_algorithm(&attributes, PSA_ALG_HMAC(PSA_ALG_SHA_256));
+    psa_set_key_lifetime(&attributes, PSA_KEY_LIFETIME_VOLATILE);
+    mbedtls_svc_key_id_t key_id = 0;
+    status = psa_import_key(&attributes, reinterpret_cast<const unsigned char*>(key.data()), key.size(), &key_id);
+    psa_reset_key_attributes(&attributes);
+    if (status != PSA_SUCCESS) return fail("加签密钥导入失败", status);
+
     unsigned char hmac[32] = {};
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (!info || mbedtls_md_setup(&ctx, info, 1) != 0 ||
-        mbedtls_md_hmac_starts(&ctx, reinterpret_cast<const unsigned char*>(key.data()), key.size()) != 0 ||
-        mbedtls_md_hmac_update(&ctx, reinterpret_cast<const unsigned char*>(data.data()), data.size()) != 0 ||
-        mbedtls_md_hmac_finish(&ctx, hmac) != 0) {
-        mbedtls_md_free(&ctx);
-        return {};
-    }
-    mbedtls_md_free(&ctx);
+    size_t hmac_len = 0;
+    status = psa_mac_compute(key_id, PSA_ALG_HMAC(PSA_ALG_SHA_256),
+                             reinterpret_cast<const unsigned char*>(data.data()), data.size(),
+                             hmac, sizeof(hmac), &hmac_len);
+    // 每条消息使用临时密钥，无论计算是否成功都销毁，避免耗尽 PSA 密钥槽位。
+    psa_status_t cleanup = psa_destroy_key(key_id);
+    if (status != PSA_SUCCESS) return fail("HMAC-SHA256 计算失败", status);
+    if (cleanup != PSA_SUCCESS) return fail("临时加签密钥清理失败", cleanup);
+    if (hmac_len != sizeof(hmac)) return fail("HMAC-SHA256 长度异常", PSA_ERROR_CORRUPTION_DETECTED);
 
     unsigned char out[64] = {};
     size_t out_len = 0;
-    if (mbedtls_base64_encode(out, sizeof(out), &out_len, hmac, sizeof(hmac)) != 0) return {};
+    int rc = mbedtls_base64_encode(out, sizeof(out), &out_len, hmac, hmac_len);
+    if (rc != 0) {
+        if (error) *error = "Base64 编码失败 (Mbed TLS " + std::to_string(rc) + ")";
+        return {};
+    }
     return std::string(reinterpret_cast<char*>(out), out_len);
 }
 
@@ -1286,11 +1309,18 @@ static bool send_to_channel(const IdfPushChannel& channel, const char* sender_ra
             url = channel.url;
             if (!channel.key1.empty()) {
                 int64_t ts = utc_millis();
+                if (ts < 1700000000000LL) {
+                    idf_log_line("钉钉时间尚未同步，请先同步 NTP");
+                    if (detail) *detail = "钉钉时间尚未同步，请先同步 NTP";
+                    return false;
+                }
                 std::string sign_data = std::to_string(ts) + "\n" + channel.key1;
-                std::string signature = hmac_sha256_base64(sign_data, channel.key1);
-                if (ts < 1700000000000LL || signature.empty()) {
-                    idf_log_line("钉钉签名生成失败或时间尚未同步");
-                    if (detail) *detail = "钉钉签名生成失败或时间尚未同步";
+                std::string signing_error;
+                std::string signature = hmac_sha256_base64(sign_data, channel.key1, &signing_error);
+                if (signature.empty()) {
+                    std::string message = "钉钉签名生成失败：" + signing_error;
+                    idf_log_line(message.c_str());
+                    if (detail) *detail = message;
                     return false;
                 }
                 std::string sign = url_encode(signature);
@@ -1341,12 +1371,19 @@ static bool send_to_channel(const IdfPushChannel& channel, const char* sender_ra
             url = channel.url;
             body = "{";
             if (!channel.key1.empty()) {
-                int64_t ts = time(nullptr);
-                // 飞书签名与钉钉相反: 以 ts+"\n"+secret 为密钥、空串为消息做 HMAC-SHA256
-                std::string sign = hmac_sha256_base64("", std::to_string(ts) + "\n" + channel.key1);
-                if (ts < 1700000000LL || sign.empty()) {
-                    idf_log_line("飞书签名生成失败或时间尚未同步");
-                    if (detail) *detail = "飞书签名生成失败或时间尚未同步";
+                int64_t ts = utc_millis() / 1000;
+                if (ts < 1700000000LL) {
+                    idf_log_line("飞书时间尚未同步，请先同步 NTP");
+                    if (detail) *detail = "飞书时间尚未同步，请先同步 NTP";
+                    return false;
+                }
+                // 飞书以 ts+"\n"+secret 为密钥，空串为消息；与钉钉的参数顺序不同。
+                std::string signing_error;
+                std::string sign = hmac_sha256_base64("", std::to_string(ts) + "\n" + channel.key1, &signing_error);
+                if (sign.empty()) {
+                    std::string message = "飞书签名生成失败：" + signing_error;
+                    idf_log_line(message.c_str());
+                    if (detail) *detail = message;
                     return false;
                 }
                 body += "\"timestamp\":\"" + std::to_string(ts) + "\",\"sign\":\"" + sign + "\",";
