@@ -30,9 +30,10 @@ with tempfile.TemporaryDirectory(prefix='test-cellular-', dir=host) as temp:
     cpp.write_text(fixture, encoding='utf-8')
     compiler = os.environ.get('CXX') or ('cl' if os.name == 'nt' and shutil.which('cl') else 'g++')
     include = ROOT / 'components/idf_logbuf/include'
+    modem_include = ROOT / 'components/idf_modem/include'
     if Path(compiler).stem.lower() == 'cl':
-        args = ['/nologo', '/std:c++17', '/EHsc', '/utf-8', '/D_CRT_SECURE_NO_WARNINGS', f'/I{include}', str(cpp), f'/Fe:{binary}']
+        args = ['/nologo', '/std:c++17', '/EHsc', '/utf-8', '/D_CRT_SECURE_NO_WARNINGS', f'/I{include}', f'/I{modem_include}', str(cpp), f'/Fe:{binary}']
     else:
-        args = ['-std=c++17', '-Wall', '-Wextra', '-Werror', f'-I{include}', str(cpp), '-o', str(binary)]
+        args = ['-std=c++17', '-Wall', '-Wextra', '-Werror', f'-I{include}', f'-I{modem_include}', str(cpp), '-o', str(binary)]
     subprocess.run([compiler, *args], cwd=temp, check=True)
     subprocess.run([str(binary)], check=True)

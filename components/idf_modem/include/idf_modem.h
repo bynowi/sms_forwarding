@@ -84,6 +84,8 @@ bool idf_modem_at_idle(void);
 void idf_modem_request_status_sample(void);
 // 保存蜂窝设置后投递非阻塞应用请求；模组任务读取最新配置并验证 IP，失败时有界重试。
 void idf_modem_request_data_mode_apply(void);
+// 启动 60 秒/64 条的来电诊断，仅记录过滤前的 UART 行结构，不记录参数正文。
+esp_err_t idf_modem_start_call_diagnostics(void);
 // 重申短信存储选择(CPMS MT→ME→SM)：短信任务随 CMGF/CNMI 周期重申一起调用，
 // 覆盖"模组自发复位后存储回落默认值、短信无处可存"的静默失效
 void idf_modem_reassert_sms_storage(void);

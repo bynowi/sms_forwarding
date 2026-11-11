@@ -805,6 +805,15 @@
     }
 
     // ---- AT Terminal ----
+    function startCallDiagnostics(){
+      var btn=document.getElementById('callDiagBtn');
+      if(btn&&btn.disabled)return;
+      if(btn)btn.disabled=true;
+      return csrfFetch('/modem?action=call-diagnostics',{method:'POST',cache:'no-store'})
+        .then(jsonOrThrow).then(function(d){showToast(d.message||(d.success?'诊断已开启':'诊断未开启'),d.success?'ok':'error');})
+        .catch(function(){showToast('来电诊断请求失败，请重试','error');})
+        .finally(function(){if(btn)btn.disabled=false;});
+    }
     function atTime(){var d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(11,19);}
     function addLog(msg,type){
       type=type||'resp';var log=document.getElementById('atLog'),div=document.createElement('div'),b=document.createElement('b');

@@ -10,6 +10,7 @@
             <button type="button" class="at-chip" onclick="atQuick('AT+CPMS?')">短信存储</button>
             <button type="button" class="at-chip" onclick="atQuick('AT+CGSN')">模组序列号</button>
             <button type="button" class="at-chip" onclick="atQuick('AT+CGSN=1')">IMEI</button>
+            <button type="button" class="at-chip" id="callDiagBtn" onclick="startCallDiagnostics()">来电诊断（60秒）</button>
           </div>
           <div id="atLog" tabindex="0" aria-label="AT 指令响应">就绪 — 输入 AT 指令开始调试</div>
           <div class="console-command">

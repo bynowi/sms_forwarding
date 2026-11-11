@@ -1,4 +1,5 @@
 #include "idf_sms.h"
+#include "idf_call_urc.h"
 #include "idf_sms_reply_check.h"
 #include "idf_sms_timestamp.h"
 
@@ -766,7 +767,7 @@ static void notify_incoming_call(const std::string& number)
     if (!number.empty()) {
         const IdfSmsProcessView cfg = idf_config_get_sms_process_view();
         if (number_blacklisted(cfg.numberBlackList, number)) {
-            idf_logf("来电 %s 在黑名单中，已忽略", number.c_str());
+            idf_log_line("来电号码命中黑名单，已忽略通知");
             return;
         }
     }
@@ -774,7 +775,7 @@ static void notify_incoming_call(const std::string& number)
     std::string body = "来电：" + num;
     std::string display_ts = idf_util_format_epoch_local(static_cast<uint32_t>(time(nullptr)),
                                                          idf_config_get_tz_offset());
-    idf_logf("来电通知：%s，入队转发中", num.c_str());
+    idf_logf("来电通知：%s，入队转发中", number.empty() ? "未知号码" : "号码已获取");
     if (!idf_push_enqueue_forward(num.c_str(), body.c_str(), display_ts.c_str(), 0)) {
         idf_log_line("转发入口队列已满，来电通知未能入队");
     }
@@ -782,6 +783,16 @@ static void notify_incoming_call(const std::string& number)
 
 static void handle_call_urc_line(const std::string& line)
 {
+    if (idf_call_urc::ended(line)) {
+        // 短来电可能在补查号码前结束；仍应提醒一次，再释放本次呼叫的去重状态。
+        if (s_call_saw_ring && !s_call_notified) notify_incoming_call(s_call_number);
+        s_call_started_us = 0;
+        s_call_last_urc_us = 0;
+        s_call_notified = false;
+        s_call_saw_ring = false;
+        s_call_number.clear();
+        return;
+    }
     int64_t now = esp_timer_get_time();
     if (s_call_last_urc_us == 0 || now - s_call_last_urc_us > CALL_GAP_US) {
         s_call_started_us = now;
@@ -789,9 +800,11 @@ static void handle_call_urc_line(const std::string& line)
         s_call_saw_ring = false;
         s_call_number.clear();
         // 与通知开关分离：用于确认模组是否真的上报了来电，不记录主叫号码。
-        idf_log_line("收到模组来电指示(RING/CLIP)");
+        idf_log_line("收到模组来电指示(RING/CRING/CLIP)");
     }
     s_call_last_urc_us = now;
+    // CLIP 本身也表示一次来电；隐号上报可能没有号码，仍需走延迟未知号码提醒。
+    s_call_saw_ring = true;
     if (starts_with(line, "+CLIP:")) {
         std::string number = parse_clip_number(line);
         if (!number.empty()) s_call_number = number;
@@ -799,8 +812,6 @@ static void handle_call_urc_line(const std::string& line)
             s_call_notified = true;
             notify_incoming_call(s_call_number);
         }
-    } else {
-        s_call_saw_ring = true;
     }
 }
 
@@ -822,8 +833,8 @@ static void process_urc_line(const std::string& raw)
         return;
     }
 
-    // 来电通知：RING/+CLIP 优先处理并返回，独立于短信 PDU 等待逻辑
-    if (line == "RING" || starts_with(line, "+CLIP:")) {
+    // 来电通知：振铃/号码/结束事件优先处理，独立于短信 PDU 等待逻辑
+    if (idf_call_urc::relevant(line)) {
         handle_call_urc_line(line);
         return;
     }

@@ -29,6 +29,7 @@ jobs:
           python tools/test_modem_network.py
           python tools/test_sim_credentials.py
           python tools/test_modem_uart.py
+          python tools/test_incoming_call.py
           python tools/test_cellular_http.py
           python tools/test_push_response.py
           python tools/test_push_signing.py

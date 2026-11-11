@@ -1033,13 +1033,18 @@ static esp_err_t handle_modem_control(httpd_req_t* req)
     WebModemActionGuard modem_action;
     bool needs_modem = (action == "restart" || action == "hardreset" ||
                         action == "signal" || action == "operator" || action == "imei");
-    if ((action == "restart" || action == "hardreset" || action == "sim-puk") && req->method != HTTP_POST) {
+    if ((action == "restart" || action == "hardreset" || action == "sim-puk" ||
+         action == "call-diagnostics") && req->method != HTTP_POST) {
         set_json_no_cache(req);
         return httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"该操作需要 POST\"}");
     }
     if (needs_modem && !modem_action.begin(req)) return ESP_OK;
 
-    if (action == "sim-puk") {
+    if (action == "call-diagnostics") {
+        esp_err_t err = idf_modem_start_call_diagnostics();
+        success = err == ESP_OK;
+        message = success ? "来电诊断已开启，请在 60 秒内拨入，再查看系统日志" : esp_err_to_name(err);
+    } else if (action == "sim-puk") {
         esp_err_t err = idf_modem_request_sim_unlock(true);
         success = err == ESP_OK;
         message = success ? "PUK 解锁请求已提交，请查看 SIM 状态" : esp_err_to_name(err);

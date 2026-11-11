@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 #include "idf_http_response.h"
+#include "idf_call_urc.h"
+void record_call_diagnostics(const std::string&) {}
 using esp_err_t = int;
 constexpr int ESP_OK=0, ESP_FAIL=1, ESP_ERR_INVALID_STATE=2, ESP_ERR_INVALID_ARG=3, ESP_ERR_TIMEOUT=4;
 constexpr int MODEM_UART=1, s_at_mutex=1, pdTRUE=1;

@@ -1,4 +1,6 @@
 #include "idf_iccid.h"
+#include "idf_call_urc.h"
+#include "idf_call_diagnostics.h"
 #include "idf_modem.h"
 #include "idf_modem_sampling.h"
 
@@ -80,6 +82,7 @@ static std::string s_urc_buffer;
 static std::string s_uart_line_carry;
 static int64_t s_uart_line_started_us = 0;
 static bool s_uart_wait_cmt_pdu = false;
+static IdfCallDiagnostics s_call_diagnostics;
 static int64_t s_uart_wait_cmt_until_us = 0;
 static bool s_started = false;
 static std::atomic<int> s_reset_request{0};  // 1=AT软重启，2=EN硬重启；由模组任务执行
@@ -494,16 +497,33 @@ static bool looks_like_pdu_line(const std::string& line)
     return std::all_of(line.begin(), line.end(), [](unsigned char ch) { return isxdigit(ch); });
 }
 
+static void finish_call_diagnostics_if_due(void)
+{
+    int reason = s_call_diagnostics.finish_if_due(esp_timer_get_time());
+    if (reason) idf_log_line(reason == 1 ? "来电诊断结束：60 秒窗口已到期"
+                                        : "来电诊断结束：已达到 64 条上限");
+}
+
+static void record_call_diagnostics(const std::string& line)
+{
+    char shape[112];
+    if (s_call_diagnostics.record(line, esp_timer_get_time(), shape, sizeof(shape))) {
+        idf_logf("来电诊断 UART：%s", shape);
+    }
+    finish_call_diagnostics_if_due();
+}
+
 static void preserve_uart_urc_line(const std::string& raw, int64_t received_us)
 {
     std::string line = idf_util_trim_copy(raw);
     if (line.empty()) return;
+    record_call_diagnostics(line);  // 必须在白名单过滤前观察，未知厂商上报也留下脱敏结构。
     if (s_uart_wait_cmt_pdu && esp_timer_get_time() > s_uart_wait_cmt_until_us) {
         s_uart_wait_cmt_pdu = false;
     }
 
     bool cmt = line.rfind("+CMT:", 0) == 0;
-    bool standalone = line.rfind("+CMTI:", 0) == 0 || line.rfind("+CLIP:", 0) == 0 || line == "RING";
+    bool standalone = line.rfind("+CMTI:", 0) == 0 || idf_call_urc::relevant(line);
     if (cmt || standalone || (s_uart_wait_cmt_pdu && looks_like_pdu_line(line))) {
         append_urc_text(line + "\r\n", received_us);
     }
@@ -2414,7 +2434,7 @@ static bool configure_sms_and_registration(void)
     bool cnmi_ok = send_ok("AT+CNMI=2,2,0,0,0", 1200);
     send_ok("AT+CEREG=2", 1200);
     // 开启主叫号码上报：来电时模组主动上报 RING + +CLIP: "号码",...，供来电通知使用。
-    // 无语音能力的卡/模组下该指令可能 ERROR，忽略即可(收不到来电就不会有 URC)。
+    // 该设置返回 ERROR 只能说明配置未确认，不能据此断言模组没有来电提醒能力。
     if (!send_ok("AT+CLIP=1", 1200)) {
         idf_log_line("模组未确认开启来电号码上报(AT+CLIP=1)，请检查模组语音支持及配置");
     }
@@ -2691,6 +2711,7 @@ static void modem_task(void*)
     bool sms_reconfigure_pending = false;  // 换卡/掉网恢复后在注册成功点再次重申短信栈
     while (true) {
         bool reset_handled = handle_reset_request_if_any();
+        finish_call_diagnostics_if_due();
         run_pending_reinit_if_recovered();
         if (!sim_ready && idf_modem_get_status().simState == "ready") sim_ready = true;
         TickType_t now = xTaskGetTickCount();
@@ -3070,6 +3091,14 @@ void idf_modem_request_data_mode_apply(void)
 {
     s_data_mode_apply_requested.store(true, std::memory_order_relaxed);
     idf_log_line("蜂窝数据设置已排队，等待模组 AT 就绪且空闲后应用");
+}
+
+esp_err_t idf_modem_start_call_diagnostics(void)
+{
+    if (!s_started) return ESP_ERR_INVALID_STATE;
+    s_call_diagnostics.start(esp_timer_get_time());
+    idf_log_line("来电诊断已开启：请在 60 秒内拨入，最多记录 64 条脱敏 UART 结构");
+    return ESP_OK;
 }
 
 void idf_modem_begin_esim_operation(void)

@@ -99,9 +99,36 @@ async function testCellularIpDisplay() {
       data.dataEnabled ? (data.cellIp ? '已取得 IP' : '允许上网') : '已禁用');
   }
 }
+async function testCallDiagnostics() {
+  const a = app();
+  a.elements.callDiagBtn = { disabled: false };
+  const requests = [];
+  let reply = {success: true, message: '60 秒内拨入，再查看系统日志'};
+  a.context.csrfFetch = (url, opt) => {
+    requests.push({url, opt});
+    return Promise.resolve({ok: true, json: () => Promise.resolve(reply)});
+  };
+  const pending = a.context.startCallDiagnostics();
+  assert.equal(a.elements.callDiagBtn.disabled, true);
+  a.context.startCallDiagnostics();
+  assert.equal(requests.length, 1);
+  await pending;
+  assert.equal(requests[0].url, '/modem?action=call-diagnostics');
+  assert.equal(requests[0].opt.method, 'POST');
+  assert.equal(a.elements.callDiagBtn.disabled, false);
+  assert.equal(a.notices.at(-1).kind, 'ok');
+  reply = {success: false, message: '模组未启动'};
+  await a.context.startCallDiagnostics();
+  assert.equal(a.notices.at(-1).kind, 'error');
+  a.context.csrfFetch = () => Promise.reject(new Error('offline'));
+  await a.context.startCallDiagnostics();
+  assert.equal(a.elements.callDiagBtn.disabled, false);
+  assert.equal(a.notices.at(-1).kind, 'error');
+}
 (async () => {
   testHexCredentialInput();
   await testCellularIpDisplay();
+  await testCallDiagnostics();
   await testQueuedAndComplete();
   await testInflightPollAndErrors();
   console.log('modem refresh UI regression tests passed');
