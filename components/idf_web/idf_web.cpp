@@ -39,6 +39,7 @@
 #include "idf_wifi.h"
 #include "mbedtls/base64.h"
 #include "mbedtls/md.h"
+#include "lwip/sockets.h"
 #include "nvs.h"
 #include "web_assets.h"
 
@@ -174,9 +175,32 @@ static bool auth_matches_config(const char* auth)
     return idf_config_check_web_auth(reinterpret_cast<char*>(decoded), colon + 1);
 }
 
-// 配网热点模式下允许免认证访问的接口白名单：只覆盖"进入独立配网页并配好 WiFi"
-// 所需的最小集合。刻意不放行 /ui、/status、/config.json、/assets 等——配网页是
-// 自包含的独立页面，不需要它们；不放行可避免开放热点期间暴露完整后台与已有配置。
+// AP/STA 同时启用时，只有配网地址应提供门户，路由器分配的地址提供正常后台。
+static bool request_targets_provisioning_ap(httpd_req_t* req)
+{
+    uint32_t ap_ip = idf_wifi_get_ap_ipv4();
+    if (ap_ip == 0) return false;
+    // 以实际连接的本地地址区分 AP/STA；Host 可由客户端伪造，不能用来决定免认证。
+    sockaddr_storage address = {};
+    socklen_t size = sizeof(address);
+    if (getsockname(httpd_req_to_sockfd(req), reinterpret_cast<sockaddr*>(&address), &size) != 0) return false;
+    if (address.ss_family == AF_INET) {
+        return reinterpret_cast<const sockaddr_in*>(&address)->sin_addr.s_addr == ap_ip;
+    }
+#if LWIP_IPV6
+    if (address.ss_family == AF_INET6) {
+        const auto* ipv6 = reinterpret_cast<const sockaddr_in6*>(&address);
+        if (IN6_IS_ADDR_V4MAPPED(&ipv6->sin6_addr)) {
+            uint32_t ipv4 = 0;
+            memcpy(&ipv4, &ipv6->sin6_addr.s6_addr[12], sizeof(ipv4));
+            return ipv4 == ap_ip;
+        }
+    }
+#endif
+    return false;
+}
+
+// 配网地址仅放行最小配网接口；完整后台、短信及配置读取仍须认证。
 static bool is_ap_open_uri(const char* uri)
 {
     if (!uri) return false;
@@ -237,7 +261,7 @@ static bool check_auth(httpd_req_t* req)
     // 只读/配网接口强制认证意义不大。导出/导入/OTA/发短信/收件箱等敏感接口不在
     // 白名单内，仍需认证，避免开放热点期间泄露密钥或被滥用。
     if (reject_cross_origin(req)) return false;
-    if (idf_wifi_is_ap_mode() && is_ap_open_uri(req->uri)) return true;
+    if (request_targets_provisioning_ap(req) && is_ap_open_uri(req->uri)) return true;
 
     char auth[512] = {};
     if (httpd_req_get_hdr_value_str(req, "Authorization", auth, sizeof(auth)) == ESP_OK &&
@@ -321,7 +345,7 @@ static esp_err_t send_gzip_asset(httpd_req_t* req, const WebAsset& asset, const 
 static esp_err_t handle_root(httpd_req_t* req)
 {
     // 配网热点模式：只下发自包含的独立配网页(免密)，不加载完整后台，杜绝已有配置暴露
-    if (idf_wifi_is_ap_mode()) {
+    if (request_targets_provisioning_ap(req)) {
         return send_gzip_asset(req, WEB_AP, "no-store, max-age=0");
     }
     if (!check_auth(req)) return ESP_OK;
@@ -3939,7 +3963,7 @@ static esp_err_t handle_reboot(httpd_req_t* req)
 
 static esp_err_t handle_not_found(httpd_req_t* req)
 {
-    if (idf_wifi_get_status().apMode) {
+    if (request_targets_provisioning_ap(req)) {
         httpd_resp_set_status(req, "302 Found");
         httpd_resp_set_hdr(req, "Location", "http://192.168.1.1/");
         return httpd_resp_send(req, nullptr, 0);

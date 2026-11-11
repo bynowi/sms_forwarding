@@ -19,5 +19,6 @@ idf_component_register(
     idf_sms
     idf_wifi
     mbedtls
+    lwip
     web_assets
 )

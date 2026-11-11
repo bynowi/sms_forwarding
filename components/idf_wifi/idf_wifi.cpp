@@ -1280,6 +1280,17 @@ bool idf_wifi_is_ap_mode(void)
     return ap_state_snapshot().mode;
 }
 
+uint32_t idf_wifi_get_ap_ipv4(void)
+{
+    if (!s_ap_netif || !s_state_mutex) return 0;
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return 0;
+    bool enabled = s_ap_mode;
+    xSemaphoreGive(s_state_mutex);
+    if (!enabled) return 0;
+    esp_netif_ip_info_t info = {};
+    return esp_netif_get_ip_info(s_ap_netif, &info) == ESP_OK ? info.ip.addr : 0;
+}
+
 IdfWifiStatus idf_wifi_get_status(void)
 {
     IdfWifiStatus s;

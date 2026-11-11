@@ -40,6 +40,7 @@ jobs:
           python tools/test_sched_persistence.py
           python tools/test_sms_timestamp.py
           python tools/test_ap_provisioning.py
+          python tools/test_ap_routing.py
           node tests/ap_provisioning_ui_test.js
           node tests/modem_refresh_ui_test.js
           node tests/keepalive_ui_test.js
