@@ -1,11 +1,27 @@
 #!/usr/bin/env python3
 """在主机上编译真实模组函数和调度片段，回归慢卡读取与刷新排队行为。"""
 from pathlib import Path
+import os
+import shutil
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-source = (ROOT / 'components/idf_modem/idf_modem.cpp').read_text()
+source = (ROOT / 'components/idf_modem/idf_modem.cpp').read_text(encoding='utf-8')
+
+
+def compile_run(cpp, binary, includes):
+    compiler = os.environ.get('CXX') or ('cl' if os.name == 'nt' and shutil.which('cl') else 'g++')
+    if os.name == 'nt':
+        binary = binary.with_suffix('.exe')
+    if Path(compiler).stem.lower() == 'cl':
+        args = ['/nologo', '/std:c++17', '/EHsc', '/utf-8', '/D_CRT_SECURE_NO_WARNINGS',
+                *[f'/I{path}' for path in includes], str(cpp), f'/Fe:{binary}']
+    else:
+        args = ['-std=c++17', '-Wall', '-Wextra', '-Werror',
+                *[f'-I{path}' for path in includes], str(cpp), '-o', str(binary)]
+    subprocess.run([compiler, *args], cwd=cpp.parent, check=True)
+    subprocess.run([str(binary)], check=True)
 
 
 def function(name):
@@ -34,11 +50,7 @@ with tempfile.TemporaryDirectory(prefix='test-modem-', dir=ROOT / 'build') as te
     cpp = Path(temp) / 'test.cpp'
     binary = Path(temp) / 'test'
     cpp.write_text(fixture)
-    subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
-                    '-I', str(ROOT / 'components/idf_modem/include'),
-                    '-I', str(ROOT / 'components/idf_config/include'),
-                    str(cpp), '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    compile_run(cpp, binary, [ROOT / 'components/idf_modem/include', ROOT / 'components/idf_config/include'])
 
 # 同时编译真实身份采样/状态更新/换卡函数，避免仅验证调度替身而漏掉 CNUM 条件。
 header = (ROOT / 'components/idf_modem/include/idf_modem.h').read_text()
@@ -57,7 +69,4 @@ with tempfile.TemporaryDirectory(prefix='test-phone-', dir=ROOT / 'build') as te
     cpp = Path(temp) / 'test.cpp'
     binary = Path(temp) / 'test'
     cpp.write_text(phone_fixture)
-    subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
-                    '-I', str(ROOT / 'components/idf_config/include'),
-                    str(cpp), '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    compile_run(cpp, binary, [ROOT / 'components/idf_config/include'])

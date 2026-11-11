@@ -1519,8 +1519,8 @@
         setGauge('gRsrq', d.rsrq, -20, -3, (samplingNow && (d.rsrq == null || d.rsrq === 999)) ? '采样中' : ((!d.modemReady && (d.rsrq == null || d.rsrq === 999)) ? '注册后采样' : fmtDb(d.rsrq)), -15, -10);
         setGauge('gSinr', d.sinr, 0, 30, (samplingNow && (d.sinr == null || d.sinr === 999)) ? '采样中' : ((!d.modemReady && (d.sinr == null || d.sinr === 999)) ? '注册后采样' : fmtDb(d.sinr)), 0, 13);
         setGauge('gWifi', (d.rssi == null || d.rssi >= 0) ? null : d.rssi, -90, -40, (d.rssi == null || d.rssi >= 0) ? '--' : (d.rssi + ' dBm'), -75, -65);  // WiFi RSSI(质量见下方卡片)
-        ovSet('ovData', d.dataEnabled ? '已启用' : '已禁用');
-        ovSet('ovDataSub', d.dataEnabled ? (d.cellIp || '获取中') : '零流量');
+        ovSet('ovData', d.dataEnabled ? (d.cellIp ? '已取得 IP' : '允许上网') : '已禁用');
+        ovSet('ovDataSub', d.dataEnabled ? (d.cellIp || '尚未取得 IP，请查看日志') : '零流量');
         ovSet('ovSms', d.smsTotal); ovSet('ovLastSms', '最近 ' + fmtEpoch(d.lastSmsEpoch));
         ovSet('ovInbox', d.inboxCount + ' 条');
         var busyQueues = !!(d.slowBusy || d.fwdQueueDepth || d.queueDepth || d.outSmsQueueDepth || d.emailQueueDepth);
@@ -1537,7 +1537,7 @@
         ovSet('dvMfr', pendingValue(d.mfr, d.identityFresh, d)); ovSet('dvModel', pendingValue(d.model, d.identityFresh, d)); ovSet('dvFw', pendingValue(d.fwver, d.identityFresh, d));
         // SIM 卡信息
         ovSet('tOp', d.operator || (d.modemInitPhase === 'sampling' ? '读取中' : (d.identityFresh ? '未读到' : (d.modemReady ? '未刷新' : modemPhaseText(d))))); ovSet('tModem', modemPhaseText(d));
-        ovSet('tCellIp', d.dataEnabled ? (d.cellIp || '获取中') : '— (未启用)');
+        ovSet('tCellIp', d.dataEnabled ? (d.cellIp || '尚未取得 IP，请查看日志') : '— (未启用)');
         ovSet('tPhone', d.phone || '--'); ovSet('tImei', pendingValue(d.imei, d.identityFresh, d)); ovSet('tIccid', pendingValue(d.iccid, d.identityFresh, d));
         ovSet('tImsi', pendingValue(d.imsi, d.identityFresh, d)); ovSet('tApn', apnText(d));
         var simLock = document.getElementById('simLockStatus');

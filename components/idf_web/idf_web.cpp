@@ -1128,31 +1128,22 @@ static bool plmn_valid(const std::string& plmn)
     return true;
 }
 
-static bool apn_valid_for_at(const std::string& apn)
-{
-    return apn.size() <= 96 && apn.find('"') == std::string::npos &&
-           apn.find('\r') == std::string::npos && apn.find('\n') == std::string::npos;
-}
-
 struct ModemApplyTaskArg {
-    bool dataChanged = false;
     bool operatorChanged = false;
-    bool dataEnabled = false;
-    bool roamingEnabled = true;
-    std::string apn;
     std::string operatorPlmn;
 };
 
 static void modem_apply_task(void* raw)
 {
     ModemApplyTaskArg* arg = static_cast<ModemApplyTaskArg*>(raw);
-    bool data_changed = arg->dataChanged;
     bool operator_changed = arg->operatorChanged;
-    bool data_enabled = arg->dataEnabled;
-    bool roaming_enabled = arg->roamingEnabled;
-    std::string apn = std::move(arg->apn);
     std::string operator_plmn = std::move(arg->operatorPlmn);
     delete arg;
+
+    if (!operator_changed) {
+        vTaskDelete(nullptr);
+        return;
+    }
 
     bool claimed = false;
     if (cell_job_lock()) {
@@ -1201,27 +1192,6 @@ static void modem_apply_task(void* raw)
         }
     }
 
-    if (data_changed) {
-        if (data_enabled && !roaming_enabled && modem.ceregStat == 5) {
-            // 数据漫游关闭且当前漫游：仅不激活数据 PDP；短信可用性由 SIM、模组与运营商网络共同决定
-            idf_modem_send_at("AT+CGACT=0,1", 5000, resp);
-            idf_log_line("数据漫游已关闭：当前处于漫游，未激活蜂窝数据(不跑流量)");
-        } else if (data_enabled) {
-            if (!apn.empty() && apn_valid_for_at(apn)) {
-                std::string cmd = "AT+CGDCONT=1,\"IP\",\"" + apn + "\"";
-                idf_modem_send_at(cmd, 3000, resp);
-            } else if (!apn.empty()) {
-                idf_log_line("APN 包含非法字符，未下发 CGDCONT");
-            }
-            idf_modem_send_at("AT+CGACT=1,1", 10000, resp);
-            std::string ip_resp;
-            idf_modem_send_at("AT+CGPADDR=1", 3000, ip_resp);
-            idf_logf("蜂窝数据已启用(APN=%s)", apn.empty() ? "自动" : apn.c_str());
-        } else {
-            idf_modem_send_at("AT+CGACT=0,1", 5000, resp);
-            idf_log_line("蜂窝数据已禁用(零流量)");
-        }
-    }
     finish();
 }
 
@@ -1593,15 +1563,13 @@ static esp_err_t handle_save(httpd_req_t* req)
         httpd_resp_sendstr(req, "OK");
         idf_log_line("网页保存蜂窝设置");
         if (credentials_changed) idf_modem_request_sim_unlock(false);
-        if (!data_changed && !operator_changed) return ESP_OK;
+        // 数据设置直接投递给现有模组任务，无需额外分配 4KB 工作任务栈。
+        if (data_changed) idf_modem_request_data_mode_apply();
+        if (!operator_changed) return ESP_OK;
 
         ModemApplyTaskArg* arg = new (std::nothrow) ModemApplyTaskArg();
         if (arg) {
-            arg->dataChanged = data_changed;
             arg->operatorChanged = operator_changed;
-            arg->dataEnabled = after.dataEnabled;
-            arg->roamingEnabled = after.roamingEnabled;  // 不带上它，漫游关闭的立即生效保护永远不触发
-            arg->apn = after.apn;
             arg->operatorPlmn = after.operatorPlmn;
             if (xTaskCreate(modem_apply_task, "idf_sim_apply", 4096, arg, 3, nullptr) != pdPASS) {
                 delete arg;

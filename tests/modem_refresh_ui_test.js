@@ -7,7 +7,8 @@ function app() {
   const elements = {
     modemRefreshButton: { disabled: false, textContent: '刷新模组信息' },
     modemSampleResult: { textContent: '' },
-    ovRefresh: { textContent: '' }
+    ovRefresh: { textContent: '' },
+    ovData: { textContent: '' }, ovDataSub: { textContent: '' }, tCellIp: { textContent: '' }
   };
   const timers = [], urls = [], notices = [];
   let reply = () => Promise.resolve({ modemSampleRequested: 1, modemSampleCompleted: 0 });
@@ -81,8 +82,26 @@ function testHexCredentialInput() {
   assert.match(html, /name="sim0Pin" inputmode="numeric"/);
   assert.match(html, /name="sim0Puk" inputmode="numeric"/);
 }
+async function testCellularIpDisplay() {
+  const a = app();
+  for (const data of [
+    {dataEnabled: true, cellIp: ''},
+    {dataEnabled: true, cellIp: '10.1.2.3'},
+    {dataEnabled: false, cellIp: ''}
+  ]) {
+    a.setReply(() => Promise.resolve(data));
+    a.context.loadStatus(false);
+    await settle();
+    assert.equal(a.elements.tCellIp.textContent,
+      data.dataEnabled ? (data.cellIp || '尚未取得 IP，请查看日志') : '— (未启用)');
+    assert.notEqual(a.elements.tCellIp.textContent, '获取中');
+    assert.equal(a.elements.ovData.textContent,
+      data.dataEnabled ? (data.cellIp ? '已取得 IP' : '允许上网') : '已禁用');
+  }
+}
 (async () => {
   testHexCredentialInput();
+  await testCellularIpDisplay();
   await testQueuedAndComplete();
   await testInflightPollAndErrors();
   console.log('modem refresh UI regression tests passed');

@@ -104,9 +104,11 @@ int main() {
     for (int i = 0; i < 50; ++i) assert(!sample_identity_once(true, true, true));
     assert(next_reply == 1 && s_status.phone == number);
     // 真实换卡入口清除旧号码与网络身份，并排队刷新；配置中的手动号码不参与此状态。
+    s_status.cellIp = "10.1.2.3";
     idf_modem_invalidate_sim_identity();
     assert(s_status.phone.empty() && s_status.iccid.empty() && s_status.imsi.empty());
     assert(s_status.operatorName.empty() && !s_identity_network_attempted);
+    assert(s_status.cellIp.empty());
     assert(refresh_requests == 1);
     s_status.iccid = "8986001234567890124";
     s_status.imsi = "460001234567891";

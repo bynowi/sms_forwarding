@@ -84,6 +84,8 @@ static int64_t s_uart_wait_cmt_until_us = 0;
 static bool s_started = false;
 static std::atomic<int> s_reset_request{0};  // 1=AT软重启，2=EN硬重启；由模组任务执行
 static bool s_data_mode_retry_pending = false;
+// 网页只投递最新配置的应用请求，CGACT 与重试均由模组任务串行处理。
+static std::atomic<bool> s_data_mode_apply_requested{false};
 static uint8_t s_data_mode_retry_count = 0;
 static TickType_t s_next_data_mode_retry = 0;
 static std::atomic<int> s_logged_sms_storage_code{-1};  // -1=未知，0=MT，1=ME，2=SM
@@ -902,7 +904,11 @@ static std::string query_sim_state(void)
         compact.erase(std::remove_if(compact.begin(), compact.end(), [](unsigned char ch) {
             return isspace(ch);
         }), compact.end());
-        if (compact.find("+CMEERROR:10") != std::string::npos) return "absent";
+        size_t error_pos = compact.find("+CMEERROR:");
+        int error_code = -1;
+        if (error_pos != std::string::npos &&
+            sscanf(compact.c_str() + error_pos, "+CMEERROR:%d", &error_code) == 1 &&
+            error_code == 10) return "absent";
         return "unknown";
     }
     std::string compact = resp;
@@ -1683,7 +1689,9 @@ static bool sample_cell_ip_once(void)
 {
     std::string resp;
     std::string ip;
-    if (send_ok("AT+CGPADDR=1", 3000, &resp) && parse_cgpaddr_ip(resp, ip)) {
+    // 超时/AT 忙不代表 PDP 已掉线，保留最近一次确认的地址。
+    if (!send_ok("AT+CGPADDR=1", 3000, &resp)) return false;
+    if (parse_cgpaddr_ip(resp, ip)) {
         set_status_cell_ip(ip);
         idf_logf("蜂窝PDP IP: %s", ip.c_str());
         return true;
@@ -1868,6 +1876,8 @@ static void schedule_data_mode_retry(void)
 
 static void apply_startup_data_mode(void)
 {
+    // 新配置覆盖旧的重试，防止成功后又执行过期的后台重试。
+    s_data_mode_retry_pending = false;
     if (model_skips_cgact()) {
         idf_log_line("该型号跳过启动 CGACT 配置");
         return;
@@ -1875,11 +1885,14 @@ static void apply_startup_data_mode(void)
     IdfSimSettingsView cfg = idf_config_get_sim_settings_view();
     bool ok = apply_configured_data_mode_once(cfg, 6000, 2500);
     if (ok) {
-        idf_log_line(cfg.dataEnabled ? "已按配置启用蜂窝数据(AT+CGACT=1,1)"
+        bool roaming_blocked = cfg.dataEnabled && !cfg.roamingEnabled &&
+                               idf_modem_get_status().ceregStat == 5;
+        idf_log_line(roaming_blocked ? "数据漫游已关闭：当前处于漫游，未激活蜂窝数据"
+                       : cfg.dataEnabled ? "已按配置启用蜂窝数据(AT+CGACT=1,1)"
                                      : "已禁用数据连接(AT+CGACT=0,1)，防止流量消耗");
     } else {
-        idf_log_line(cfg.dataEnabled ? "启动时激活数据连接未成功，转入后台重试"
-                                     : "启动时禁用数据连接未确认，转入后台重试");
+        idf_log_line(cfg.dataEnabled ? "激活数据连接未取得 IP，转入后台重试"
+                                     : "禁用数据连接未确认，转入后台重试");
         schedule_data_mode_retry();
     }
 }
@@ -1912,16 +1925,25 @@ static void apply_operator_if_configured(const IdfSimSettingsView& cfg)
 
 static bool process_data_mode_retry(void)
 {
+    if (!idf_modem_get_status().atReady || !at_channel_idle_now()) return false;
+    // 未就绪或 AT 正忙时不消费请求；多次保存合并，执行时读取最新配置。
+    if (s_data_mode_apply_requested.load(std::memory_order_relaxed)) {
+        s_data_mode_apply_requested.exchange(false, std::memory_order_relaxed);
+        apply_startup_data_mode();
+        return true;
+    }
     if (!s_data_mode_retry_pending) return false;
     if (static_cast<int32_t>(xTaskGetTickCount() - s_next_data_mode_retry) < 0) return false;  // 回绕安全
-    if (!at_channel_idle_now()) return false;
 
     ++s_data_mode_retry_count;
     IdfSimSettingsView cfg = idf_config_get_sim_settings_view();
     bool ok = apply_configured_data_mode_once(cfg, 8000, 3000);
     if (ok) {
         s_data_mode_retry_pending = false;
-        idf_log_line(cfg.dataEnabled ? "后台重试：蜂窝数据已启用" : "后台重试：蜂窝数据已禁用");
+        bool roaming_blocked = cfg.dataEnabled && !cfg.roamingEnabled &&
+                               idf_modem_get_status().ceregStat == 5;
+        idf_log_line(roaming_blocked ? "后台重试：数据漫游已关闭，未激活蜂窝数据"
+                       : cfg.dataEnabled ? "后台重试：蜂窝数据已启用" : "后台重试：蜂窝数据已禁用");
     } else if (s_data_mode_retry_count >= MODEM_DATA_MODE_RETRY_MAX) {
         s_data_mode_retry_pending = false;
         idf_log_line("后台重试 CGACT 仍失败，保留当前模组状态");
@@ -2393,7 +2415,9 @@ static bool configure_sms_and_registration(void)
     send_ok("AT+CEREG=2", 1200);
     // 开启主叫号码上报：来电时模组主动上报 RING + +CLIP: "号码",...，供来电通知使用。
     // 无语音能力的卡/模组下该指令可能 ERROR，忽略即可(收不到来电就不会有 URC)。
-    send_ok("AT+CLIP=1", 1200);
+    if (!send_ok("AT+CLIP=1", 1200)) {
+        idf_log_line("模组未确认开启来电号码上报(AT+CLIP=1)，请检查模组语音支持及配置");
+    }
     // NET 指示灯开关(ML307R: AT+MLED=0,<0/1>)：每次初始化按保存的配置下发，
     // 覆盖模组记住的上次状态
     send_ok(idf_config_net_led_enabled() ? "AT+MLED=0,1" : "AT+MLED=0,0", 1200);
@@ -2472,10 +2496,12 @@ bool idf_modem_sms_health_check(std::string& summary)
 }
 
 // 锁 PIN/PUK 的 SIM 仍然在位，热插拔检测不能把它当成拔卡并触发重启循环。
-static bool query_sim_present(void)
+static int query_sim_present(void)
 {
     std::string state = query_sim_state();
-    return state != "absent" && state != "unknown";
+    // 查询失败不是拔卡；保留未知状态，避免清空身份后在下次 READY 时误重启。
+    if (state == "unknown") return -1;
+    return state == "absent" ? 0 : 1;
 }
 
 // 重启后 AT 握手失败时置位：一旦后续任何探测发现 AT 恢复，立即补跑完整初始化
@@ -2496,6 +2522,7 @@ static bool handle_reset_request_if_any(void)
     patch.atReady = false;
     patch.modemReady = false;
     update_status(patch);
+    set_status_cell_ip("");  // 明确重启后旧 PDP 地址失效，不能继续当作当前地址。
     reset_identity_sampling_state();
     if (request == 2) {
         idf_log_line("执行模组硬重启");
@@ -2851,8 +2878,10 @@ static void modem_task(void*)
             (last_sim_check == 0 || now - last_sim_check > pdMS_TO_TICKS(SIM_CHECK_INTERVAL_MS)) &&
             at_channel_idle_now()) {
             last_sim_check = now;
-            int present_now = query_sim_present() ? 1 : 0;
-            if (sim_present == -1) {
+            int present_now = query_sim_present();
+            if (present_now == -1) {
+                idf_log_line("SIM 在位查询未确认，保留原状态，不触发插拔重启");
+            } else if (sim_present == -1) {
                 sim_present = present_now;  // 首次仅记基线，不当作插拔事件
             } else if (present_now != sim_present) {
                 sim_present = present_now;
@@ -3037,6 +3066,12 @@ void idf_modem_request_status_sample(void)
     if (!already_pending) idf_log_line("模组信息刷新已排队，等待 AT 通道就绪且空闲");
 }
 
+void idf_modem_request_data_mode_apply(void)
+{
+    s_data_mode_apply_requested.store(true, std::memory_order_relaxed);
+    idf_log_line("蜂窝数据设置已排队，等待模组 AT 就绪且空闲后应用");
+}
+
 void idf_modem_begin_esim_operation(void)
 {
     s_esim_operation_depth.fetch_add(1, std::memory_order_relaxed);
@@ -3071,6 +3106,7 @@ void idf_modem_invalidate_sim_identity(void)
         s_status.phone.clear();
         s_status.operatorName.clear();
         s_status.apnSim.clear();
+        s_status.cellIp.clear();
         s_status.identityFresh = false;
         xSemaphoreGive(s_status_mutex);
     }

@@ -788,6 +788,8 @@ static void handle_call_urc_line(const std::string& line)
         s_call_notified = false;
         s_call_saw_ring = false;
         s_call_number.clear();
+        // 与通知开关分离：用于确认模组是否真的上报了来电，不记录主叫号码。
+        idf_log_line("收到模组来电指示(RING/CLIP)");
     }
     s_call_last_urc_us = now;
     if (starts_with(line, "+CLIP:")) {
