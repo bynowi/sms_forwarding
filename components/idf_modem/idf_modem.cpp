@@ -1533,6 +1533,12 @@ static bool wait_mhttp_download_locked(int http_id, uint32_t timeout_ms, uint32_
     bool error = false;
     uint8_t buf[128];
     size_t initial_pos = 0;
+    uint64_t payload_chars = 0;
+    uint64_t decoded_bytes = 0;
+    int high_nibble = -1;
+    bool finish_after_payload = false;
+    result.responseComplete = false;
+    result.response = IdfHttpResponseBody{};
 
     while (!deadline.expired() && !complete) {
         // 请求的 OK 与首个 HTTP URC 可能同包到达，先消费命令阶段已读的字节。
@@ -1550,6 +1556,29 @@ static bool wait_mhttp_download_locked(int http_id, uint32_t timeout_ms, uint32_
         if (got <= 0) continue;
         for (int i = 0; i < got && !complete; ++i) {
             char ch = static_cast<char>(buf[i]);
+            if (payload_chars > 0) {
+                // MHTTPCFG encoding=1,1 的正文是十六进制，不能按 UART 分包或换行猜长度。
+                int nibble = ch >= '0' && ch <= '9' ? ch - '0' :
+                             ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 :
+                             ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : -1;
+                if (nibble < 0) {
+                    result.response.invalid = true;
+                    result.message = "蜂窝HTTP正文编码无效或数据不完整";
+                    return false;
+                }
+                if (high_nibble < 0) high_nibble = nibble;
+                else {
+                    char byte = static_cast<char>((high_nibble << 4) | nibble);
+                    result.response.append(&byte, 1);
+                    ++decoded_bytes;
+                    high_nibble = -1;
+                }
+                if (--payload_chars == 0) {
+                    complete = finish_after_payload;
+                    skipping_data = true;
+                }
+                continue;
+            }
             if (skipping_data) {
                 if (ch == '\n') {
                     skipping_data = false;
@@ -1574,12 +1603,33 @@ static bool wait_mhttp_download_locked(int http_id, uint32_t timeout_ms, uint32_
             else if (starts_with(head, "+MHTTPURC: \"header\"")) need_commas = 4;
             if (need_commas > 0 && comma_count(head) >= need_commas) {
                 parse_mhttp_head(head, http_id, result, complete, error);
+                // 保号大流量下载仍只计数；普通推送保留有上限的完整业务响应。
+                if (min_bytes == 0 && need_commas == 5) {
+                    long nums[5] = {};
+                    int count = 0;
+                    if (parse_comma_longs(head.substr(head.find(',') + 1), nums, 5, count) &&
+                        count >= 4 && nums[0] == http_id) {
+                        if (nums[2] < 0 || nums[3] < 0 ||
+                            static_cast<uint64_t>(nums[2]) != decoded_bytes + static_cast<uint64_t>(nums[3])) {
+                            result.response.invalid = true;
+                            result.message = "蜂窝HTTP正文累计长度不一致";
+                            return false;
+                        }
+                        if (nums[3] > 0) {
+                            payload_chars = static_cast<uint64_t>(nums[3]) * 2;
+                            finish_after_payload = complete;
+                            complete = false;
+                            high_nibble = -1;
+                        }
+                    }
+                }
                 skipping_data = true;
                 head.clear();
             }
         }
     }
 
+    result.responseComplete = complete && !error;
     if (!complete) {
         result.message = "蜂窝HTTP响应等待超时";
         idf_log_line(result.message.c_str());

@@ -8,6 +8,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "idf_http_response.h"
 using esp_err_t = int;
 constexpr int ESP_OK=0, ESP_FAIL=1, ESP_ERR_INVALID_STATE=2, ESP_ERR_INVALID_ARG=3, ESP_ERR_TIMEOUT=4;
 constexpr int MODEM_UART=1, s_at_mutex=1, pdTRUE=1;
@@ -70,6 +71,53 @@ bool send_at_data_locked(const std::string&, const std::string&, std::string&) {
 void reset() { now=0; s_uart_line_carry.clear(); s_uart_wait_cmt_pdu=false; commands.clear(); sms.clear(); uart_data.clear(); status_ip="10.2.3.4"; close_failures=0; fetch_count=0; fetch_ok=true; pdp_ready=true; assert(lock_depth==0); }
 int main() {
     IdfCellularHttpResult r;
+    // 推送正文必须按声明字节数完整解码；覆盖 UART 每一个分包边界。
+    const std::string json = "{\"code\":19024,\"msg\":\"Key Words Not Found\"}";
+    const std::string push_header = "OK\r\n+MHTTPURC: \"header\",0,200,0,\r\n";
+    auto content = [](const std::string& data, size_t total, size_t received, int id = 0) {
+        return "+MHTTPURC: \"content\"," + std::to_string(id) + "," + std::to_string(total) + "," +
+               std::to_string(received) + "," + std::to_string(data.size()) + "," + hex_encode_ascii(data) + "\r\n";
+    };
+    const std::string push_reply = push_header + content(json, json.size(), json.size());
+    for (size_t split = 0; split <= push_reply.size(); ++split) {
+        reset(); r = {}; uart_data = push_reply.substr(split);
+        assert(wait_mhttp_download_locked(0, 1000, 0, r, push_reply.substr(0, split)));
+        assert(r.response.body == json && !r.response.truncated && !r.response.invalid);
+    }
+    // 多段正文、其它连接和中途收到的短信不能污染本次响应。
+    reset(); r = {};
+    uart_data = content("bad", 3, 3, 1) + content(json.substr(0, 5), json.size(), 5) +
+                "+CMT: ,23\r\n00112233445566778899AABBCCDDEEFF00\r\n" +
+                content(json.substr(5), json.size(), json.size());
+    assert(wait_mhttp_download_locked(0, 5000, 0, r, push_header));
+    assert(r.response.body == json && sms.size() == 2);
+    // 超长正文仍完整排空，但标记截断，不允许业务层将前缀判为成功。
+    reset(); r = {};
+    std::string large(IDF_HTTP_RESPONSE_MAX + 128, 'x');
+    uart_data = content(large, large.size(), large.size());
+    assert(wait_mhttp_download_locked(0, 30000, 0, r, push_header));
+    assert(r.response.truncated && r.response.body.size() == IDF_HTTP_RESPONSE_MAX);
+    reset(); r = {};
+    uart_data = "+MHTTPURC: \"content\",0,2,2,2,7Z\r\n";
+    assert(!wait_mhttp_download_locked(0, 1000, 0, r, push_header));
+    assert(!r.responseComplete);
+    assert(r.response.invalid);
+    reset(); r = {};
+    uart_data = content(json, json.size(), json.size());
+    assert(!wait_mhttp_download_locked(0, 1000, 0, r, "OK\r\n+MHTTPURC: \"header\",0,403,0,\r\n"));
+    assert(r.responseComplete && r.httpStatus == 403 && r.response.body == json);
+    reset(); r = {};
+    uart_data = "+MHTTPURC: \"content\",0,2,2,2,7B";
+    assert(!wait_mhttp_download_locked(0, 1000, 0, r, push_header));
+    reset(); r = {};
+    uart_data = content("{\"code\":0}", 30, 30);
+    assert(!wait_mhttp_download_locked(0, 1000, 0, r, push_header));
+    assert(r.response.invalid && !r.responseComplete);
+    // chunked 的未知总长度由空的终结 URC 收尾。
+    reset(); r = {};
+    uart_data = content(json, 0, json.size()) + content("", 0, json.size());
+    assert(wait_mhttp_download_locked(0, 1000, 0, r, push_header));
+    assert(r.response.body == json && r.responseComplete);
     // 请求 OK 同包的 DNS 错误必须保留，不能误报超时。
     reset();
     assert(!wait_mhttp_download_locked(0,1000,48*1024,r,"OK\r\n+MHTTPURC: \"err\",0,1\r\n"));

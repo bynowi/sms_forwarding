@@ -191,7 +191,7 @@
         var pushType = ch.type || 1;
         var defName = '通道' + (i + 1);
         var configured = en || !!ch.url || !!ch.key1 || !!ch.key1Set || !!ch.key2 || !!ch.key2Set ||
-          !!ch.customBody || (pushType && pushType != 1) || (ch.name && ch.name !== defName);
+          !!ch.customBody || !!ch.successRule || (pushType && pushType != 1) || (ch.name && ch.name !== defName);
         var folded = !en;
         html += '<div class="push-channel' + (en ? ' enabled' : '') + (folded ? ' folded' : '') + (configured ? ' configured' : '') + '" id="channel' + idx + '" data-configured="' + (configured ? '1' : '0') + '">';
         html += '<div class="push-channel-header">';
@@ -225,6 +225,7 @@
         html += '<div class="form-group"><label>其它参数</label><input type="text" id="bark_other' + idx + '" placeholder="markdown=...&ciphertext=..."></div>';
         html += '</div><p class="form-hint">保存时会自动合成为 Bark 参数；可用 {sender} {receiver} {message} {timestamp} 占位符。</p></div></details></div>';
         html += '<div id="custom' + idx + '" style="display:none;"><div class="form-group"><label>请求体模板（使用 {sender} {receiver} {local_number} {message} {timestamp} 占位符）</label><textarea name="push' + idx + 'body" rows="4" style="width:100%;font-family:monospace;">' + htmlEsc(ch.customBody || '') + '</textarea></div></div>';
+        html += '<div class="form-group" id="responseRuleGroup' + idx + '" style="display:none;"><label>响应成功条件（可选）</label><input type="text" name="push' + idx + 'rule" id="responseRule' + idx + '" maxlength="160" value="' + htmlEsc(ch.successRule || '') + '" placeholder="code=0 或 success=true"><p class="form-hint">支持 JSON 字段路径，例如 data.status=&quot;ok&quot;。留空自动检查常见业务码；无法识别时只确认 HTTP 请求完成。</p></div>';
         html += '<button type="button" class="btn btn-secondary btn-sm" onclick="testPush(' + idx + ', this)">测试推送</button><div class="result-box" id="pushTestResult' + idx + '"></div>';
         html += '</div></div>';
       }
@@ -409,6 +410,8 @@
       });
       var body = form.querySelector('[name="push' + idx + 'body"]');
       if (body) body.value = '';
+      var responseRule = document.getElementById('responseRule' + idx);
+      if (responseRule) responseRule.value = '';
       for (var slot = 1; slot <= 2; slot++) {
         var keep = document.getElementById('key' + slot + 'Keep' + idx);
         if (keep) { keep.value = '0'; keep.dataset.saved = '0'; }
@@ -551,6 +554,8 @@
       var bp = document.getElementById('barkParams' + idx);
       var ba = document.getElementById('barkAdvanced' + idx);
       extra.style.display = 'none'; custom.style.display = 'none';
+      var ruleGroup = document.getElementById('responseRuleGroup' + idx);
+      if (ruleGroup) ruleGroup.style.display = (type == 1 || type == 3 || type == 7) ? 'block' : 'none';
       document.getElementById('key1label' + idx).innerText = '参数 1';
       document.getElementById('key2label' + idx).innerText = '参数 2';
       document.getElementById('urllabel' + idx).innerText = '推送URL/Webhook';
@@ -564,11 +569,11 @@
       if (type == 1) hint.innerHTML = 'POST JSON<br>{"sender":"+447700900123","receiver":"+447700900456","message":"...","timestamp":"2026-01-01 12:00:00"}';
       else if (type == 2) { hint.innerHTML = 'Bark (iOS)<br>URL 留空使用 https://api.day.app；自建填服务器根地址，设备端发送到 /push。'; extra.style.display='block'; if(kg)kg.style.display='none'; if(ba)ba.style.display='block'; document.getElementById('urllabel'+idx).innerText='Bark 服务器 URL'; document.getElementById('url'+idx).placeholder='留空=官方服务；自建=https://bark.example.com'; document.getElementById('key1label'+idx).innerText='Device Key'; document.getElementById('key1'+idx).placeholder='Bark App 中显示的 key'; bindBarkParams(idx); loadBarkParams(idx); serializeBarkParams(idx); }
       else if (type == 3) hint.innerHTML = 'GET 请求<br>URL?sender=xxx&receiver=xxx&message=xxx&timestamp=xxx';
-      else if (type == 4) { hint.innerHTML = '钉钉机器人<br>填写 Webhook 地址，加签需填 Secret'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（加签密钥，可选）'; document.getElementById('key1'+idx).placeholder='SEC...'; }
+      else if (type == 4) { hint.innerHTML = '钉钉机器人<br>填写 Webhook 地址，加签需填 Secret。测试消息含“短信通知”，请确认符合机器人关键词规则。'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（加签密钥，可选）'; document.getElementById('key1'+idx).placeholder='SEC...'; }
       else if (type == 5) { hint.innerHTML = 'PushPlus<br>填写 Token，URL 留空使用默认'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Token'; document.getElementById('key1'+idx).placeholder='pushplus token'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='发送渠道'; document.getElementById('key2'+idx).placeholder='wechat / extension / app'; }
-      else if (type == 6) { hint.innerHTML = 'Server酱<br>填写 SendKey，URL 留空使用默认'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='SendKey'; document.getElementById('key1'+idx).placeholder='SCT...'; }
+      else if (type == 6) { hint.innerHTML = 'Server酱<br>填写 SCT 或 sctp SendKey，URL 留空自动选择 Turbo / Server酱³ 接口'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='SendKey'; document.getElementById('key1'+idx).placeholder='SCT... / sctp...'; }
       else if (type == 7) { hint.innerHTML = '自定义模板<br>使用 {sender} {receiver} {local_number} {message} {timestamp} 占位符'; custom.style.display='block'; }
-      else if (type == 8) { hint.innerHTML = '飞书机器人<br>填写 Webhook 地址，签名验证需填 Secret'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（签名密钥，可选）'; document.getElementById('key1'+idx).placeholder='飞书签名密钥'; }
+      else if (type == 8) { hint.innerHTML = '飞书机器人<br>填写 Webhook 地址，签名验证需填 Secret。测试消息含“短信通知”，请确认符合机器人关键词规则。'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（签名密钥，可选）'; document.getElementById('key1'+idx).placeholder='飞书签名密钥'; }
       else if (type == 9) { hint.innerHTML = 'Gotify<br>填写服务器地址 + 应用 Token'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Token（应用 Token）'; document.getElementById('key1'+idx).placeholder='A...'; }
       else if (type == 10) { hint.innerHTML = 'Telegram Bot<br>Chat ID（参数1）+ Bot Token（参数2）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Chat ID'; document.getElementById('key1'+idx).placeholder='123456789'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='Bot Token'; document.getElementById('key2'+idx).placeholder='12345678:ABC...'; }
     }

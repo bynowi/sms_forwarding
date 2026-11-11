@@ -280,6 +280,7 @@ static void normalize_config(IdfConfig& c)
         limit_utf8_bytes(ch.key1, 256);
         limit_utf8_bytes(ch.key2, 512);
         limit_utf8_bytes(ch.customBody, 1024);
+        limit_utf8_bytes(ch.successRule, 160);
     }
 
     for (int i = 0; i < IDF_MAX_SCHED_TASKS; ++i) {
@@ -606,6 +607,7 @@ esp_err_t idf_config_load(void)
             ch.key1 = read_str(nvs, key("k1").c_str(), "", 256);
             ch.key2 = read_str(nvs, key("k2").c_str(), "", 512);
             ch.customBody = read_str(nvs, key("body").c_str(), "", 1024);
+            ch.successRule = read_str(nvs, key("rule").c_str(), "", 160);
         }
 
         for (int i = 0; i < IDF_MAX_SCHED_TASKS; ++i) {
@@ -766,6 +768,8 @@ std::string idf_config_export_text(bool full_export)
         append_kv(out, key, full_export ? ch.key2 : redact_secret(ch.key2));
         snprintf(key, sizeof(key), "push%dbody", i);
         append_kv(out, key, full_export ? ch.customBody : redact_secret(ch.customBody));
+        snprintf(key, sizeof(key), "push%drule", i);
+        append_kv(out, key, ch.successRule);
     }
 
     for (int i = 0; i < IDF_MAX_SCHED_TASKS; ++i) {
@@ -908,6 +912,7 @@ static void apply_import_key(IdfConfig& c, const std::string& key, const std::st
         else if (suffix == "k1" && !is_redacted_secret(value)) ch.key1 = value;
         else if (suffix == "k2" && !is_redacted_secret(value)) ch.key2 = value;
         else if (suffix == "body" && !is_redacted_secret(value)) ch.customBody = value;
+        else if (suffix == "rule") ch.successRule = value;
     }
 }
 
@@ -1178,6 +1183,7 @@ static esp_err_t save_config_to_nvs(const IdfConfig& c)
         if (err == ESP_OK) err = write_str(nvs, key("k1").c_str(), ch.key1);
         if (err == ESP_OK) err = write_str(nvs, key("k2").c_str(), ch.key2);
         if (err == ESP_OK) err = write_str(nvs, key("body").c_str(), ch.customBody);
+        if (err == ESP_OK) err = write_str(nvs, key("rule").c_str(), ch.successRule);
     }
 
     for (int i = 0; err == ESP_OK && i < IDF_MAX_SCHED_TASKS; ++i) {
@@ -1538,6 +1544,8 @@ static void normalize_push_channel_for_save(IdfPushChannel& ch, int index)
     limit_utf8_bytes(ch.key1, 256);
     limit_utf8_bytes(ch.key2, 512);
     limit_utf8_bytes(ch.customBody, 1024);
+    ch.successRule = trim_copy(ch.successRule);
+    limit_utf8_bytes(ch.successRule, 160);
 }
 
 esp_err_t idf_config_save_push(bool enabled, const IdfPushChannel channels[IDF_MAX_PUSH_CHANNELS])
@@ -1568,6 +1576,7 @@ esp_err_t idf_config_save_push(bool enabled, const IdfPushChannel channels[IDF_M
         if (err == ESP_OK) err = write_str(nvs, key("k1").c_str(), ch.key1);
         if (err == ESP_OK) err = write_str(nvs, key("k2").c_str(), ch.key2);
         if (err == ESP_OK) err = write_str(nvs, key("body").c_str(), ch.customBody);
+        if (err == ESP_OK) err = write_str(nvs, key("rule").c_str(), ch.successRule);
     }
     err = commit_field_save(nvs, err, "推送通道");
     if (err == ESP_OK) {

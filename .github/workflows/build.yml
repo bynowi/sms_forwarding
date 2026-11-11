@@ -29,6 +29,7 @@ jobs:
           python tools/test_sim_credentials.py
           python tools/test_modem_uart.py
           python tools/test_cellular_http.py
+          python tools/test_push_response.py
           python tools/test_keepalive_config.py
           python tools/test_daily_heartbeat.py
           python tools/test_scheduled_sms_health.py
@@ -38,6 +39,7 @@ jobs:
           node tests/ap_provisioning_ui_test.js
           node tests/modem_refresh_ui_test.js
           node tests/keepalive_ui_test.js
+          node tests/push_response_ui_test.js
           node tools/tests/test_scheduled_sms_ui.js
           node --check code/web_src/app.js
           python tools/build_web_assets.py --check

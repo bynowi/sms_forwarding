@@ -6,6 +6,7 @@
 
 #include "esp_err.h"
 #include "idf_config.h"
+#include "idf_http_response.h"
 
 struct IdfModemStatus {
     bool started = false;
@@ -40,12 +41,14 @@ struct IdfModemStatus {
 
 struct IdfCellularHttpResult {
     bool ok = false;
+    bool responseComplete = false;  // HTTP 错误状态仍可能带有完整的平台错误正文。
     int httpStatus = -1;
     uint32_t bytesRead = 0;
     uint32_t expectedBytes = 0;
     int mhttpError = 0;
     std::string cellIp;
     std::string message;
+    IdfHttpResponseBody response;
 };
 
 struct IdfCellularHttpConfig {

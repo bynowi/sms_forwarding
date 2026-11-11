@@ -615,7 +615,8 @@ static esp_err_t send_config_json(httpd_req_t* req)
         snprintf(buf, sizeof(buf), "\"key2Set\":%s,\"key2Redacted\":%s,",
                  ch.key2.empty() ? "false" : "true", key2_redacted ? "true" : "false");
         body += buf;
-        json_prop(body, "customBody", ch.customBody);
+        json_prop(body, "customBody", ch.customBody); body += ",";
+        json_prop(body, "successRule", ch.successRule);
         body += "}";
     }
     {
@@ -1272,6 +1273,8 @@ static void parse_push_channels_form(const IdfFormFields& fields,
         channels[i].key2 = field_text(fields, key);
         snprintf(key, sizeof(key), "push%dbody", i);
         channels[i].customBody = field_text(fields, key);
+        snprintf(key, sizeof(key), "push%drule", i);
+        channels[i].successRule = has_field(fields, key) ? field_text(fields, key) : previous[i].successRule;
         preserve_redacted_push_key(fields, previous[i], i, 1, channels[i]);
         preserve_redacted_push_key(fields, previous[i], i, 2, channels[i]);
     }
@@ -1474,6 +1477,14 @@ static esp_err_t handle_save(httpd_req_t* req)
         IdfPushChannel channels[IDF_MAX_PUSH_CHANNELS];
         IdfConfigWebView current = idf_config_get_web_view();
         parse_push_channels_form(fields, current.pushChannels, channels);
+        for (const auto& channel : channels) {
+            if ((channel.type == 1 || channel.type == 3 || channel.type == 7) &&
+                !idf_push_validate_success_rule(channel.successRule)) {
+                set_no_cache_headers(req);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "响应成功条件无效，例如 code=0、success=true 或 data.status=\"ok\"");
+                return ESP_OK;
+            }
+        }
         esp_err_t err = idf_config_save_push(has_field(fields, "pushEnabled"), channels);
         if (err != ESP_OK) return fail(err);
         return ok("网页保存推送通道");

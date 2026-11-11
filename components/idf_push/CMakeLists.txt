@@ -1,8 +1,9 @@
 idf_component_register(
-  SRCS "idf_push.cpp"
+  SRCS "idf_push.cpp" "idf_push_response.cpp"
   INCLUDE_DIRS "include"
   REQUIRES
     esp_http_client
+    espressif__cjson
     esp_timer
     esp-tls
     idf_config

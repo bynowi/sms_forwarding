@@ -63,6 +63,7 @@ struct IdfPushChannel {
     std::string key1;
     std::string key2;
     std::string customBody;
+    std::string successRule;  // 通用渠道响应成功条件，空值使用常见业务码识别。
 };
 
 struct IdfConfig {

@@ -23,6 +23,7 @@ int idf_push_forward_queue_depth(void);
 int idf_push_retry_queue_depth(void);
 int idf_push_email_queue_depth(void);
 bool idf_push_busy(void);
+bool idf_push_validate_success_rule(const std::string& rule);
 
 // 与实际短信转发共用同一规则引擎，供网页规则测试使用，避免浏览器正则语义与固件不一致。
 IdfForwardRuleDecision idf_push_eval_forward_rules(const std::string& rules,
