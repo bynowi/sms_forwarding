@@ -307,7 +307,7 @@ Get-CimInstance Win32_SerialPort | Select-Object DeviceID,Description
 拉取并进入项目：
 
 ```powershell
-git clone https://github.com/MineSunshineone/sms_forwarding.git
+git clone https://github.com/bynowi/sms_forwarding.git
 cd sms_forwarding
 ```
 

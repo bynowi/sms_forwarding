@@ -45,6 +45,7 @@ jobs:
           python tools/build_web_assets.py --check
 
   build:
+    needs: host-regressions
     runs-on: ubuntu-latest
     container: espressif/idf:v6.0.2
 
@@ -102,17 +103,20 @@ jobs:
             build/idf6/partition_table/partition-table.bin
           retention-days: 7
 
-      # 推送到 master 时自动发布/更新 Release：tag 为 v<版本号>，附可直接下载的固件。
+      # 默认分支推送或手动运行时发布预发行版，兼容 main/master 命名。
       # 同版本再次推送会更新既有 Release 的附件（覆盖同名文件），不会重复建 Release。
       - name: Publish GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: 固件 v${{ steps.version.outputs.version }}
+          name: 固件 v${{ steps.version.outputs.version }}（测试版）
+          prerelease: true
           files: dist/*.bin
           body: |
             SMS Forwarder ESP-IDF 固件 **v${{ steps.version.outputs.version }}**（构建自 `${{ github.sha }}`）
+
+            此修改版为预发行固件：已通过在线编译和主机回归，尚未完成 ESP32-C3 实机内存与各推送渠道联调验证。
 
             | 文件 | 用途 |
             | --- | --- |
