@@ -10,3 +10,6 @@ idf_component_register(
     nvs_flash
     lwip
 )
+if(SMS_MODEM_PASSTHROUGH)
+  target_compile_definitions(${COMPONENT_LIB} PRIVATE SMS_MODEM_PASSTHROUGH=1)
+endif()

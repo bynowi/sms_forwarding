@@ -2,6 +2,7 @@
       <div class="card console-card at-console">
         <div class="card-header">AT 终端<button type="button" class="btn btn-secondary btn-sm console-header-action" onclick="clearATLog()">清空输出</button></div>
         <div class="card-body console-body">
+          <p class="form-hint" id="passthroughHint" hidden>UART 旁路诊断包：仅做 AT 握手、手动 AT 收发与串口观察，不收发或转发短信。测试完成后请通过 OTA 恢复普通固件。</p>
           <div class="at-chips">
             <button type="button" class="at-chip" onclick="atQuick('AT+CSQ')">信号</button>
             <button type="button" class="at-chip" onclick="atQuick('AT+CEREG?')">注册状态</button>

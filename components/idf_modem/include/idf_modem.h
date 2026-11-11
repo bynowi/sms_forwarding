@@ -57,6 +57,8 @@ struct IdfCellularHttpConfig {
 };
 
 esp_err_t idf_modem_start(const IdfConfig& config);
+// 仅专用诊断包为 true：自动 AT 仅限握手，其余由网页手动提交。
+bool idf_modem_is_passthrough(void);
 esp_err_t idf_modem_send_at(const std::string& cmd, uint32_t timeout_ms, std::string& response);
 esp_err_t idf_modem_send_at_until(const std::string& cmd, const char* token, uint32_t timeout_ms, std::string& response);
 esp_err_t idf_modem_send_pdu(const std::string& cmgs_cmd, const char* pdu, uint32_t timeout_ms, std::string& response, void (*on_submit)() = nullptr);

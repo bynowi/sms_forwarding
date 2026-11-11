@@ -125,10 +125,24 @@ async function testCallDiagnostics() {
   assert.equal(a.elements.callDiagBtn.disabled, false);
   assert.equal(a.notices.at(-1).kind, 'error');
 }
+async function testPassthroughLabel() {
+  const a = app();
+  a.elements.dvEspVer = {textContent: ''};
+  a.elements.passthroughHint = {hidden: true};
+  a.setReply(() => Promise.resolve({version: '1.1.12', modemPassthrough: true}));
+  a.context.loadStatus(false); await settle();
+  assert.equal(a.elements.dvEspVer.textContent, '1.1.12（UART旁路诊断）');
+  assert.equal(a.elements.passthroughHint.hidden, false);
+  a.setReply(() => Promise.resolve({version: '1.1.12', modemPassthrough: false}));
+  a.context.loadStatus(false); await settle();
+  assert.equal(a.elements.dvEspVer.textContent, '1.1.12');
+  assert.equal(a.elements.passthroughHint.hidden, true);
+}
 (async () => {
   testHexCredentialInput();
   await testCellularIpDisplay();
   await testCallDiagnostics();
+  await testPassthroughLabel();
   await testQueuedAndComplete();
   await testInflightPollAndErrors();
   console.log('modem refresh UI regression tests passed');

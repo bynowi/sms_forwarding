@@ -2595,6 +2595,42 @@ static void run_pending_reinit_if_recovered(void)
     s_reinit_pending = false;
 }
 
+bool idf_modem_is_passthrough(void)
+{
+#if defined(SMS_MODEM_PASSTHROUGH) && SMS_MODEM_PASSTHROUGH
+    return true;
+#else
+    return false;
+#endif
+}
+
+static void modem_passthrough_task(void*)
+{
+    // 不执行冷启动重置、SIM 解锁、CGACT、短信配置、CLIP 或定期身份/注册查询。
+    // 需用户整机断电重启，才能与正常固件初始化前的模组行为做有效对照。
+    modem_power_hold_on();
+    idf_log_line("UART 旁路诊断模式：仅自动发送 AT 握手，不执行模组业务初始化或短信转发");
+    TickType_t last_probe = xTaskGetTickCount() - pdMS_TO_TICKS(5000);
+    while (true) {
+        TickType_t now = xTaskGetTickCount();
+        if (!idf_modem_get_status().atReady &&
+            now - last_probe >= pdMS_TO_TICKS(5000)) {
+            last_probe = now;
+            if (send_ok("AT", 700)) {
+                IdfModemStatus patch;
+                patch.started = true;
+                patch.atReady = true;
+                patch.phase = "passthrough";
+                update_status(patch);
+                idf_log_line("旁路 AT 已就绪，请使用网页 AT 终端和来电诊断");
+            }
+        }
+        finish_call_diagnostics_if_due();
+        poll_unsolicited_uart(20);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
 static void modem_task(void*)
 {
     IdfModemStatus patch;
@@ -3011,7 +3047,8 @@ esp_err_t idf_modem_start(const IdfConfig& config)
     uart_flush_input(MODEM_UART);
     s_started = true;
 
-    BaseType_t ok = xTaskCreate(modem_task, "idf_modem", 8192, nullptr, 4, nullptr);
+    BaseType_t ok = xTaskCreate(idf_modem_is_passthrough() ? modem_passthrough_task : modem_task,
+                               "idf_modem", 8192, nullptr, 4, nullptr);
     if (ok != pdPASS) {
         s_started = false;
         uart_driver_delete(MODEM_UART);
@@ -3061,6 +3098,7 @@ esp_err_t idf_modem_get_imei(std::string& imei)
 
 esp_err_t idf_modem_request_reset(bool hard_reset)
 {
+    if (idf_modem_is_passthrough()) return ESP_ERR_NOT_SUPPORTED;
     if (!s_started) return ESP_ERR_INVALID_STATE;
     s_reset_request.store(hard_reset ? 2 : 1, std::memory_order_relaxed);
     set_phase("powering");

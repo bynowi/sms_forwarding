@@ -30,6 +30,7 @@ jobs:
           python tools/test_sim_credentials.py
           python tools/test_modem_uart.py
           python tools/test_incoming_call.py
+          python tools/test_modem_passthrough.py
           python tools/test_cellular_http.py
           python tools/test_push_response.py
           python tools/test_push_signing.py
@@ -95,6 +96,15 @@ jobs:
             0x10000 build/idf6/sms_forwarding_idf.bin
           ls -l dist/
 
+      - name: Build UART-only diagnostic firmware
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          V=${{ steps.version.outputs.version }}
+          idf.py -B build/uartdiag -D SDKCONFIG=build/sdkconfig.uartdiag -D SMS_MODEM_PASSTHROUGH=ON build
+          cp build/uartdiag/sms_forwarding_idf.bin "dist/sms_forwarder_uartdiag_ota_v${V}.bin"
+          python -c 'import json; from pathlib import Path; v="${{ steps.version.outputs.version }}"; assert json.loads(Path("build/idf6/project_description.json").read_text())["project_version"] == v; assert json.loads(Path("build/uartdiag/project_description.json").read_text())["project_version"] == v+"-uartdiag"'
+
       - name: Upload firmware artifact (7-day retention)
         uses: actions/upload-artifact@v4
         with:
@@ -125,6 +135,9 @@ jobs:
             | --- | --- |
             | `sms_forwarder_full_v${{ steps.version.outputs.version }}.bin` | 首次刷机、救砖、分区变化后重刷；从地址 `0x0` 整机刷写 |
             | `sms_forwarder_ota_v${{ steps.version.outputs.version }}.bin` | 设备网页「固件升级」页直接上传（OTA，无需数据线） |
+            | `sms_forwarder_uartdiag_ota_v${{ steps.version.outputs.version }}.bin` | 专用旁路诊断 OTA：仅 AT 握手/手动 AT/串口观察，不运行短信、推送与定时任务；测试后恢复普通 OTA 包 |
+
+            旁路对照测试：上传 `uartdiag_ota` 包后整机断电再上电，等待“旁路 AT 已就绪”。在 AT 终端点击“来电诊断”，用 `AT+CSQ` 验证串口采集后拨入，保存系统日志。该包用于区分普通固件初始化影响与模组自身的语音/上报行为，不是来电功能修复包，也不会自动恢复模组内部已有的持久配置。
 
             普通用户不需要下载源码，也不需要安装 Python/ESP-IDF。首次刷机推荐使用乐鑫官方 GUI 工具：
 

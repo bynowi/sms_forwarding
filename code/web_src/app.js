@@ -1541,7 +1541,8 @@
         }
         // 设备 / 固件信息卡片
         ovSet('dvHeap', kb(d.freeHeap) + ' · 最低 ' + kb(d.minFreeHeap));
-        window.__upt = d.uptime; ovSet('dvUptime', fmtUptime(d.uptime)); ovSet('dvEspVer', d.version);
+        window.__upt = d.uptime; ovSet('dvUptime', fmtUptime(d.uptime)); ovSet('dvEspVer', d.version + (d.modemPassthrough ? '（UART旁路诊断）' : ''));
+        var passthroughHint = document.getElementById('passthroughHint'); if(passthroughHint)passthroughHint.hidden=!d.modemPassthrough;
         ovSet('dvTemp', (d.chipTemp != null ? d.chipTemp + ' ℃' : '--'));
         ovSet('dvMfr', pendingValue(d.mfr, d.identityFresh, d)); ovSet('dvModel', pendingValue(d.model, d.identityFresh, d)); ovSet('dvFw', pendingValue(d.fwver, d.identityFresh, d));
         // SIM 卡信息

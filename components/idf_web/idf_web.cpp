@@ -402,6 +402,8 @@ static esp_err_t handle_status(httpd_req_t* req)
              WEB_ASSET_HASH);
     body += buf;
     json_prop(body, "simState", modem.simState); body += ",";
+    body += "\"modemPassthrough\":";
+    body += idf_modem_is_passthrough() ? "true," : "false,";
     body += "\"simCredentialMatched\":";
     body += modem.simCredentialMatched ? "true," : "false,";
     json_prop(body, "simUnlockMessage", modem.simUnlockMessage); body += ",";
@@ -4047,7 +4049,7 @@ esp_err_t idf_web_start(void)
     IDF_WEB_TRY_REGISTER("/*", register_handler(s_server, "/*", HTTP_GET, handle_not_found));
 
 #undef IDF_WEB_TRY_REGISTER
-    if (!s_scheduler_started) {
+    if (!s_scheduler_started && !idf_modem_is_passthrough()) {
         BaseType_t ok = xTaskCreate(scheduler_task, "idf_sched", 8192, nullptr, 2, nullptr);
         if (ok == pdPASS) {
             s_scheduler_started = true;
